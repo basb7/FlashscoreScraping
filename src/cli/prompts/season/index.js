@@ -24,5 +24,15 @@ export const selectSeason = async (context, leagueUrl) => {
     throw Error;
   }
 
-  return seasons.find((season) => season.name === choice);
+  const season = seasons.find((season) => season.name === choice);
+
+  if (!season?.url) {
+    console.info("\n⚠️ No valid season URL found. Exiting...\n");
+    throw Error(
+      `❌ Could not resolve a valid URL for season "${choice}"\n` +
+        `The archive page structure may have changed`
+    );
+  }
+
+  return season;
 };

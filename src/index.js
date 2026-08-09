@@ -59,8 +59,9 @@ const withRetry = async (fn, retries = 3) => {
 
     if (matchLinks.length === 0) {
       throw Error(
-        `❌ No matches found on the results page\n` +
-          `Please verify that the league name provided is correct`
+        `❌ No matches found on the results and fixtures pages\n` +
+          `Please verify that the league name provided is correct\n` +
+          `and that the chosen season actually has matches`
       );
     }
 

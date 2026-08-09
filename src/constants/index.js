@@ -1,6 +1,7 @@
 export const BASE_URL = "https://www.flashscore.com";
 export const OUTPUT_PATH = "./src/data";
 export const TIMEOUT = 2500;
+export const MATCHES_LOAD_TIMEOUT = 5000;
 export const FileTypes = Object.freeze({
   JSON: {
     label: "JSON (Padrão)",

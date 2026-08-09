@@ -4,14 +4,15 @@ import { openPageAndNavigate, waitForSelectorSafe } from "../../index.js";
 export const getListOfSeasons = async (context, leagueUrl) => {
   const page = await openPageAndNavigate(context, `${leagueUrl}/archive`);
 
-  await waitForSelectorSafe(page, ["div.archive__season > a"], TIMEOUT);
+  //await waitForSelectorSafe(page, ["div.archive__season > a"], TIMEOUT);
+  await waitForSelectorSafe(page, ["div.archiveTable__row.archiveTable__row--entry > div > a > span"], TIMEOUT);
 
   const listOfLeagueSeasons = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll("div.archive__season > a")).map(
-      (element) => {
-        return { name: element.innerText.trim(), url: element.href };
-      }
-    );
+    return Array.from(
+      document.querySelectorAll("div.archiveTable__row.archiveTable__row--entry > div > a")
+    ).map((element) => {
+      return { name: element.innerText.trim(), url: element.href };
+    });
   });
 
   await page.close();

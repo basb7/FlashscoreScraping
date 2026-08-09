@@ -1,13 +1,22 @@
 import { openPageAndNavigate, waitForSelectorSafe } from "../../index.js";
+import { MATCHES_LOAD_TIMEOUT } from "../../../constants/index.js";
 
 export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
-  const page = await openPageAndNavigate(context, `${leagueSeasonUrl}/${type}`);
+  // Archive hrefs end with "/"; normalize before appending "/<type>"
+  // to avoid a double slash that redirects to the live view.
+  const seasonUrl = leagueSeasonUrl.replace(/\/+$/, "");
+  const page = await openPageAndNavigate(context, `${seasonUrl}/${type}`);
 
   const LOAD_MORE_SELECTOR = '[data-testid="wcl-buttonLink"]';
-  const MATCH_SELECTOR =
-    ".event__match.event__match--static.event__match--twoLine";
+  const MATCH_SELECTOR = ".event__match.event__match--twoLine";
   const CLICK_DELAY = 600;
   const MAX_EMPTY_CYCLES = 4;
+
+  // Flashscore renders the match list lazily after domcontentloaded,
+  // so wait for the rows to actually appear before counting them.
+  try {
+    await page.waitForSelector(MATCH_SELECTOR, { timeout: MATCHES_LOAD_TIMEOUT });
+  } catch {}
 
   let emptyCycles = 0;
 
@@ -34,19 +43,49 @@ export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
     }
   }
 
-  await waitForSelectorSafe(page, [MATCH_SELECTOR]);
+  const matchIdList = await page.evaluate(
+    (onlyCurrentTournament) => {
+      const MATCH_SELECTOR = ".event__match.event__match--twoLine";
 
-  const matchIdList = await page.evaluate(() => {
-    return Array.from(
-      document.querySelectorAll(
-        ".event__match.event__match--static.event__match--twoLine"
-      )
-    ).map((element) => {
-      const id = element?.id?.replace("g_1_", "");
-      const url = element.querySelector("a.eventRowLink")?.href ?? null;
-      return { id, url };
-    });
-  });
+      const toMatch = (element) => ({
+        id: element?.id?.replace("g_1_", ""),
+        url: element.querySelector("a.eventRowLink")?.href ?? null,
+      });
+
+      if (!onlyCurrentTournament) {
+        return Array.from(document.querySelectorAll(MATCH_SELECTOR)).map(toMatch);
+      }
+
+      // The results page mixes the current tournament (e.g. Clausura) at the
+      // top with finished tournaments (e.g. Apertura) below. Keep only the
+      // first block of "ROUND N" headers: the current tournament's rounds
+      // come first, and the boundary is the first header that is not a
+      // plain "ROUND N" (e.g. FINAL / SEMI-FINALS / QUARTER-FINALS).
+      const nodes = Array.from(
+        document.querySelectorAll(".event__round--static, " + MATCH_SELECTOR)
+      );
+      const matches = [];
+      let collecting = false;
+
+      for (const element of nodes) {
+        const cls =
+          typeof element.className === "string"
+            ? element.className
+            : String(element.className || "");
+
+        if (cls.includes("event__round")) {
+          const isRound = /round\s+\d+/i.test(element.innerText || "");
+          if (collecting && !isRound) break;
+          if (!collecting) collecting = isRound;
+        } else if (collecting) {
+          matches.push(toMatch(element));
+        }
+      }
+
+      return matches;
+    },
+    type === "results"
+  );
 
   await page.close();
 
@@ -54,39 +93,32 @@ export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
   return matchIdList;
 };
 
+const waitForAnyOf = async (page, selectors, timeout = MATCHES_LOAD_TIMEOUT) => {
+  try {
+    await page.waitForSelector(selectors.join(","), { timeout });
+  } catch {}
+};
+
 export const getMatchData = async (context, { id: matchId, url }) => {
   const page = await openPageAndNavigate(context, url);
 
-  await waitForSelectorSafe(page, [
-    ".duelParticipant__startTime",
-    "div[data-testid='wcl-summaryMatchInformation'] > div'",
+  // Wait for the page sections to actually render before extracting;
+  // Flashscore hydrates header, match info and statistics lazily.
+  await Promise.all([
+    waitForAnyOf(page, [
+      ".duelParticipant__startTime",
+      "span[data-testid='wcl-scores-overline-03']",
+    ]),
+    waitForAnyOf(page, ["div[data-testid='wcl-summaryMatchInformation'] > div"]),
+    waitForAnyOf(page, ["div[data-testid='wcl-statistics']"]),
   ]);
 
   const matchData = await extractMatchData(page);
   const information = await extractMatchInformation(page);
-
-  const statsLink = buildStatsUrl(url);
-  await page.goto(statsLink, { waitUntil: "domcontentloaded" });
-
-  await waitForSelectorSafe(page, [
-    "div[data-testid='wcl-statistics']",
-    "div[data-testid='wcl-statistics-value']",
-  ]);
-
   const statistics = await extractMatchStatistics(page);
 
   await page.close();
   return { matchId, ...matchData, information, statistics };
-};
-
-const buildStatsUrl = (matchUrl) => {
-  if (!matchUrl) return null;
-
-  const url = new URL(matchUrl);
-  const base = url.origin + url.pathname.replace(/\/$/, "");
-  const mid = url.searchParams.get("mid");
-
-  return `${base}/summary/stats/0/?mid=${mid}`;
 };
 
 const extractMatchData = async (page) => {
@@ -195,20 +227,17 @@ const extractMatchStatistics = async (page) => {
   return await page.evaluate(async () => {
     return Array.from(
       document.querySelectorAll("div[data-testid='wcl-statistics']")
-    ).map((element) => ({
-      category: element
-        .querySelector("div[data-testid='wcl-statistics-category']")
-        ?.innerText.trim(),
-      homeValue: Array.from(
-        element.querySelectorAll(
-          "div[data-testid='wcl-statistics-value'] > strong"
-        )
-      )?.[0]?.innerText.trim(),
-      awayValue: Array.from(
-        element.querySelectorAll(
-          "div[data-testid='wcl-statistics-value'] > strong"
-        )
-      )?.[1]?.innerText.trim(),
-    }));
+    ).map((element) => {
+      const values = Array.from(
+        element.querySelectorAll("div[data-testid='wcl-statistics-value']")
+      );
+      return {
+        category: element
+          .querySelector("div[data-testid='wcl-statistics-category']")
+          ?.innerText.trim(),
+        homeValue: values[0]?.innerText.trim(),
+        awayValue: values[1]?.innerText.trim(),
+      };
+    });
   });
 };
