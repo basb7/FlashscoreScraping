@@ -43,48 +43,53 @@ export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
     }
   }
 
+  // Archived seasons (URL ends with "-2025-2026") show the whole tournament
+  // as consecutive .headerLeague blocks (e.g. Play Offs + League phase);
+  // the current season (bare league URL) mixes the current tournament at the
+  // top (e.g. Clausura) with finished ones below (e.g. Apertura).
+  const isArchivedSeason = /-\d{4}(-\d{4})?$/.test(seasonUrl);
+
   const matchIdList = await page.evaluate(
-    (onlyCurrentTournament) => {
+    ({ onlyCurrentTournament, isArchivedSeason }) => {
       const MATCH_SELECTOR = ".event__match.event__match--twoLine";
+      const ROUND_SELECTOR = ".event__round.event__round--static";
 
       const toMatch = (element) => ({
         id: element?.id?.replace("g_1_", ""),
         url: element.querySelector("a.eventRowLink")?.href ?? null,
       });
 
-      if (!onlyCurrentTournament) {
-        return Array.from(document.querySelectorAll(MATCH_SELECTOR)).map(toMatch);
+      const allMatches = () =>
+        Array.from(document.querySelectorAll(MATCH_SELECTOR)).map(toMatch);
+
+      if (!onlyCurrentTournament || isArchivedSeason) {
+        return allMatches();
       }
 
-      // The results page mixes the current tournament (e.g. Clausura) at the
-      // top with finished tournaments (e.g. Apertura) below. Keep only the
-      // first block of "ROUND N" headers: the current tournament's rounds
-      // come first, and the boundary is the first header that is not a
-      // plain "ROUND N" (e.g. FINAL / SEMI-FINALS / QUARTER-FINALS).
-      const nodes = Array.from(
-        document.querySelectorAll(".event__round--static, " + MATCH_SELECTOR)
+      // Current season: each tournament is a .headerLeague block. Keep only
+      // the first block, which is the running tournament.
+      const firstLeague = document.querySelector(
+        ".headerLeague__wrapper, .headerLeague"
       );
+
+      if (!firstLeague) return allMatches();
+
       const matches = [];
-      let collecting = false;
-
-      for (const element of nodes) {
+      let node = firstLeague.nextElementSibling;
+      while (node) {
         const cls =
-          typeof element.className === "string"
-            ? element.className
-            : String(element.className || "");
+          typeof node.className === "string"
+            ? node.className
+            : String(node.className || "");
 
-        if (cls.includes("event__round")) {
-          const isRound = /round\s+\d+/i.test(element.innerText || "");
-          if (collecting && !isRound) break;
-          if (!collecting) collecting = isRound;
-        } else if (collecting) {
-          matches.push(toMatch(element));
-        }
+        if (cls.includes("headerLeague")) break;
+        if (cls.includes("event__match")) matches.push(toMatch(node));
+        node = node.nextElementSibling;
       }
 
       return matches;
     },
-    type === "results"
+    { onlyCurrentTournament: type === "results", isArchivedSeason }
   );
 
   await page.close();
