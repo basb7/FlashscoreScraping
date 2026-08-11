@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { OUTPUT_PATH } from "./constants/index.js";
 import { parseArguments } from "./cli/arguments/index.js";
 import { promptUserOptions } from "./cli/prompts/index.js";
+import { selectStage } from "./cli/prompts/stage/index.js";
 import { start, stop } from "./cli/loader/index.js";
 import { initializeProgressbar } from "./cli/progressbar/index.js";
 
@@ -67,20 +68,56 @@ const withRetry = async (fn, retries = 3) => {
 
     stop();
 
-    const progressbar = initializeProgressbar(matchLinks.length);
+    const rounds = [...new Set(matchLinks.map((m) => m.round).filter(Boolean))];
+
+    const stageSelection = await selectStage(cliOptions.stage, rounds);
+
+    const isStageFiltered = stageSelection.value !== "todos";
+    let filteredMatchLinks = matchLinks;
+    if (isStageFiltered) {
+      filteredMatchLinks = matchLinks.filter(
+        (m) => (m.round ?? "") === stageSelection.value
+      );
+    }
+
+    if (filteredMatchLinks.length === 0) {
+      throw Error(
+        isStageFiltered
+          ? `❌ No matches found for stage "${stageSelection.value}"\n` +
+              `Available stages: ${rounds.join(", ") || "none"}`
+          : `❌ No matches found on the results and fixtures pages\n` +
+              `Please verify that the league name provided is correct\n` +
+              `and that the chosen season actually has matches`
+      );
+    }
+
+    const outputFileName = isStageFiltered
+      ? `${fileName}_${stageSelection.value
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")}`
+      : fileName;
+
+    console.info(
+      `🎯 Stage filter: ${
+        isStageFiltered ? stageSelection.value : "todos"
+      } (${filteredMatchLinks.length} matches)`
+    );
+
+    const progressbar = initializeProgressbar(filteredMatchLinks.length);
     const limit = pLimit(cliOptions.concurrency);
 
     const matchData = {};
     let processedCount = 0;
 
-    const tasks = matchLinks.map((matchLink) =>
+    const tasks = filteredMatchLinks.map((matchLink) =>
       limit(async () => {
         const data = await withRetry(() => getMatchData(context, matchLink));
         matchData[matchLink.id] = data;
 
         processedCount += 1;
         if (processedCount % cliOptions.saveInterval === 0) {
-          writeDataToFile(matchData, fileName, fileType);
+          writeDataToFile(matchData, outputFileName, fileType);
         }
 
         progressbar.increment();
@@ -90,12 +127,12 @@ const withRetry = async (fn, retries = 3) => {
     await Promise.all(tasks);
 
     progressbar.stop();
-    writeDataToFile(matchData, fileName, fileType);
+    writeDataToFile(matchData, outputFileName, fileType);
 
     console.info("\n✅ Data collection and file writing completed!");
     console.info(
       `📁 File saved to: ${chalk.cyan(
-        `${OUTPUT_PATH}/${fileName}${fileType.extension}`
+        `${OUTPUT_PATH}/${outputFileName}${fileType.extension}`
       )}\n`
     );
   } catch (error) {

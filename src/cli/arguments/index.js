@@ -6,6 +6,7 @@ export const parseArguments = () => {
     country: null,
     league: null,
     fileType: null,
+    stage: null,
     concurrency: 10,
     saveInterval: 10,
     headless: true,
@@ -15,6 +16,7 @@ export const parseArguments = () => {
     if (arg.startsWith("country=")) options.country = arg.split("=")[1];
     if (arg.startsWith("league=")) options.league = arg.split("=")[1];
     if (arg.startsWith("fileType=")) options.fileType = arg.split("=")[1];
+    if (arg.startsWith("stage=")) options.stage = arg.split("=")[1];
     if (arg.startsWith("concurrency="))
       options.concurrency = Number(arg.split("=")[1]);
     if (arg.startsWith("saveInterval="))

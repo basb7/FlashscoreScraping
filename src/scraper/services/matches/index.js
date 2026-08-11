@@ -51,40 +51,66 @@ export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
 
   const matchIdList = await page.evaluate(
     ({ onlyCurrentTournament, isArchivedSeason }) => {
-      const MATCH_SELECTOR = ".event__match.event__match--twoLine";
-      const ROUND_SELECTOR = ".event__round.event__round--static";
+      const keepAll = !onlyCurrentTournament || isArchivedSeason;
 
-      const toMatch = (element) => ({
+      const toMatch = (round) => (element) => ({
         id: element?.id?.replace("g_1_", ""),
         url: element.querySelector("a.eventRowLink")?.href ?? null,
+        round,
       });
 
-      const allMatches = () =>
-        Array.from(document.querySelectorAll(MATCH_SELECTOR)).map(toMatch);
-
-      if (!onlyCurrentTournament || isArchivedSeason) {
-        return allMatches();
-      }
-
-      // Current season: each tournament is a .headerLeague block. Keep only
-      // the first block, which is the running tournament.
-      const firstLeague = document.querySelector(
-        ".headerLeague__wrapper, .headerLeague"
+      // Unified document-order walk over tournament headers, round headers
+      // and match rows, tracking the round header that precedes each match.
+      // Layout: [headerLeague (tournament)] [event__round (round name)]
+      //         [event__match...] [event__round] [event__match...] ...
+      const nodes = Array.from(
+        document.querySelectorAll(
+          ".headerLeague__wrapper, .headerLeague, .event__round.event__round--static, .event__match.event__match--twoLine"
+        )
       );
 
-      if (!firstLeague) return allMatches();
-
       const matches = [];
-      let node = firstLeague.nextElementSibling;
-      while (node) {
+      let currentRound = "";
+      let inFirstLeague = false;
+      let blockRoot = null;
+
+      for (const node of nodes) {
         const cls =
           typeof node.className === "string"
             ? node.className
             : String(node.className || "");
 
-        if (cls.includes("headerLeague")) break;
-        if (cls.includes("event__match")) matches.push(toMatch(node));
-        node = node.nextElementSibling;
+        if (cls.includes("headerLeague")) {
+          if (!blockRoot) {
+            // First tournament header may wrap a nested inner header; both
+            // belong to the same block, so only the block root counts.
+            blockRoot = node;
+            inFirstLeague = true;
+            currentRound = "";
+            continue;
+          }
+
+          // Nested header of the first block — not a tournament boundary.
+          if (blockRoot.contains(node)) continue;
+
+          // Tournament boundary (current-season results page: keep only the
+          // first block, which is the running tournament).
+          if (!keepAll) break;
+          currentRound = "";
+          continue;
+        }
+
+        // Outside the first block, drop matches (current-season results only).
+        if (!keepAll && !inFirstLeague) continue;
+
+        if (cls.includes("event__round")) {
+          currentRound = node.innerText.trim();
+          continue;
+        }
+
+        if (cls.includes("event__match")) {
+          matches.push(toMatch(currentRound)(node));
+        }
       }
 
       return matches;
@@ -95,6 +121,13 @@ export const getMatchLinks = async (context, leagueSeasonUrl, type) => {
   await page.close();
 
   console.info(`✅ Found ${matchIdList.length} matches for ${type}`);
+  console.info(
+    `✅ Rounds found: ${
+      [...new Set(matchIdList.map((m) => m.round).filter(Boolean))].join(
+        ", "
+      ) || "none"
+    }`
+  );
   return matchIdList;
 };
 
